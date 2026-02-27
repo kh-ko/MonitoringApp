@@ -1,0 +1,123 @@
+# 1.개요 : USB 패킷을 캡처하는 서비스
+# 2.특징 :  UI쓰레드에서만 API 호출 가능하도록 설계함. 싱글 톤이지만 Lock 구조를 사용하지 않음.
+# 3.사용법 : 
+## 1) UsbSniffService()로 인스턴스 생성 - 싱글톤 클래스이므로 어디서 호출하든 같은 인스턴스 반환
+## 2) get_interfaces()로 인터페이스 목록 조회
+## 3) start_capture(interface_name)으로 캡처 시작 - 쓰레드 시작
+## 4) stop_capture()로 캡처 중지 - 캡쳐 중지및 쓰레드 중지
+
+import threading
+import subprocess
+
+# console_widget.py 파일에서 MsgType만 임포트합니다.
+from ui.components.console_widget import MsgType
+
+class UsbSniffService:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, tshark_path=r'C:\Program Files\Wireshark\tshark.exe'):
+        if getattr(self, '_initialized', False):
+            return
+            
+        self.tshark_path = tshark_path
+        self.is_capturing = False
+        self.capture_thread = None
+        self.capture_process = None
+        
+        self.console_widget = None 
+        self._initialized = True
+
+    def set_console_widget(self, widget):
+        self.console_widget = widget
+
+    def get_interfaces(self):
+        interfaces = []
+        try:
+            result = subprocess.run([self.tshark_path, '-D'], capture_output=True, text=True, encoding='utf-8')
+            for line in result.stdout.splitlines():
+                if 'USBPcap' in line:
+                    words = line.split()
+                    for word in words:
+                        if 'USBPcap' in word:
+                            short_name = word.split('\\')[-1]
+                            interfaces.append((line, short_name))
+                            break
+            return interfaces
+        except FileNotFoundError:
+            raise FileNotFoundError("tshark.exe를 찾을 수 없습니다. 경로를 확인해 주세요.")
+
+    def start_capture(self, interface_name):
+        if self.is_capturing:
+            self._log(MsgType.WARNING, "이미 캡처가 진행 중입니다.")
+            return
+
+        self.is_capturing = True
+        self.capture_thread = threading.Thread(target=self._sniff_worker, args=(interface_name,))
+        self.capture_thread.daemon = True
+        self.capture_thread.start()
+
+    def _log(self, msg_type: MsgType, message: str):
+        if self.console_widget and hasattr(self.console_widget, 'add_message'):
+            self.console_widget.add_message(msg_type, message)
+        else:
+            print(f"[{msg_type.name}] {message}")
+
+    def _sniff_worker(self, interface_name):
+        cmd = [
+            self.tshark_path, '-l', '-i', interface_name,
+            '-T', 'fields',
+            '-e', 'frame.time',
+            '-e', 'frame.len',
+            '-e', '_ws.col.Protocol',
+            '-e', '_ws.col.Info'
+        ]
+        
+        try:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+            self.capture_process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding='utf-8', startupinfo=startupinfo
+            )
+            
+            self._log(MsgType.INFO, f"--- [{interface_name}] 캡처 시작 ---")
+
+            for line in self.capture_process.stdout:
+                if not self.is_capturing:
+                    break
+                
+                line = line.strip()
+                if not line or line.startswith("Capturing on"):
+                    continue
+                
+                parts = line.split('\t')
+                if len(parts) >= 2:
+                    frame_time = parts[0]
+                    length = parts[1]
+                    protocol = parts[2] if len(parts) > 2 else "Unknown"
+                    info = parts[3] if len(parts) > 3 else "No Info"
+                    
+                    msg = f"Time: {frame_time} | Len: {length} | Proto: {protocol} | Info: {info}"
+                    self._log(MsgType.RX, msg)
+                        
+        except Exception as e:
+            self._log(MsgType.ERROR, f"캡처 중 에러 발생: {e}")
+        finally:
+            self._cleanup()
+
+    def stop_capture(self):
+        self.is_capturing = False
+        if self.capture_process and self.capture_process.poll() is None:
+            self.capture_process.terminate()
+            self.capture_process.wait()
+
+    def _cleanup(self):
+        if self.capture_process and self.capture_process.poll() is None:
+            self.capture_process.terminate()
+        self._log(MsgType.INFO, "--- 캡처 중지됨 ---")
