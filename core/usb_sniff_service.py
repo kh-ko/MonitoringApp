@@ -8,6 +8,7 @@
 
 import threading
 import subprocess
+import re # 정규표현식 모듈 추가
 
 # console_widget.py 파일에서 MsgType만 임포트합니다.
 from ui.components.console_widget import MsgType
@@ -99,6 +100,12 @@ class UsbSniffService:
                 parts = line.split('\t')
                 if len(parts) >= 2:
                     frame_time = parts[0]
+                    
+                    # [추가된 부분] 정규식을 사용해 'HH:MM:SS.mmm' (시:분:초.밀리초) 형태만 추출
+                    time_match = re.search(r'(\d{2}:\d{2}:\d{2}\.\d{3})', frame_time)
+                    if time_match:
+                        frame_time = time_match.group(1)
+
                     length = parts[1]
                     protocol = parts[2] if len(parts) > 2 else "Unknown"
                     info = parts[3] if len(parts) > 3 else "No Info"
