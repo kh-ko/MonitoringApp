@@ -76,6 +76,7 @@ class UsbSniffService:
             '-e', 'frame.len',
             '-e', '_ws.col.Protocol',
             '-e', '_ws.col.Info'
+            '-e', 'usb.capdata'
         ]
         
         try:
@@ -110,7 +111,18 @@ class UsbSniffService:
                     protocol = parts[2] if len(parts) > 2 else "Unknown"
                     info = parts[3] if len(parts) > 3 else "No Info"
                     
-                    msg = f"Time: {frame_time} | Len: {length} | Proto: {protocol} | Info: {info}"
+                    # 2. [추가됨] 실제 데이터 추출
+                    capdata = parts[4] if len(parts) > 4 else ""
+
+                    # (대용량 파일 복사 등 패킷 길이가 10000을 넘으면 스킵)
+                    if length.isdigit() and int(length) > 1000:
+                        #1000까지만 화면에 출력되도록 수정
+                        capdata = capdata[:1000]
+
+                    # 실제 데이터가 있는 경우에만 문자열에 포함되도록 구성
+                    data_str = f" | Data: {capdata}" if capdata else ""
+                    
+                    msg = f"Time: {frame_time} | Len: {length} | Proto: {protocol} | Info: {info}{data_str}"
                     self._log(MsgType.RX, msg)
                         
         except Exception as e:
