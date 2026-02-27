@@ -196,10 +196,16 @@ class UsbSniffService:
     def stop_capture(self):
         self.is_capturing = False
         if self.capture_process and self.capture_process.poll() is None:
-            self.capture_process.terminate()
-            self.capture_process.wait()
+            try:
+                # Windows 환경: /F (강제 종료), /T (하위 프로세스 트리까지 모두 종료)
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(self.capture_process.pid)], capture_output=True)
+            except Exception as e:
+                self._log(MsgType.ERROR, f"프로세스 종료 오류: {e}")
 
     def _cleanup(self):
         if self.capture_process and self.capture_process.poll() is None:
-            self.capture_process.terminate()
+            try:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(self.capture_process.pid)], capture_output=True)
+            except Exception:
+                pass
         self._log(MsgType.INFO, "--- 캡처 중지됨 ---")
