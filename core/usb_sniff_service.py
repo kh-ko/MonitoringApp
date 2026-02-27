@@ -75,8 +75,9 @@ class UsbSniffService:
             '-e', 'frame.time',
             '-e', 'frame.len',
             '-e', '_ws.col.Protocol',
-            '-e', '_ws.col.Info'
-            '-e', 'usb.capdata'
+            '-e', '_ws.col.Info',
+            '-e', 'usb.capdata',
+            '-e', 'usb.data'
         ]
         
         try:
@@ -113,14 +114,39 @@ class UsbSniffService:
                     
                     # 2. [추가됨] 실제 데이터 추출
                     capdata = parts[4] if len(parts) > 4 else ""
+                    usb_data = parts[5] if len(parts) > 5 else ""
+                    
+                    # 프로토콜 해석 여부에 따라 둘 중 하나에 값이 들어감
+                    actual_hex_data = capdata if capdata else usb_data
+                    
+                    ascii_data = ""
+                    clean_hex = ""
 
-                    # (대용량 파일 복사 등 패킷 길이가 10000을 넘으면 스킵)
-                    if length.isdigit() and int(length) > 1000:
-                        #1000까지만 화면에 출력되도록 수정
-                        capdata = capdata[:1000]
+                    if actual_hex_data:
+                        # tshark 버전에 따라 콜론(:) 구분자가 들어갈 수 있으므로 제거
+                        # clean_hex = actual_hex_data.replace(':', '')
+                        clean_hex = actual_hex_data
+                        
+                        # [최적화] 디코딩 전에 미리 자르기 (1글자 = 1바이트 = Hex 2자리)
+                        is_truncated = False
+                        if len(clean_hex) > 2000:
+                            clean_hex = clean_hex[:2000]
+                            is_truncated = True
+                            
+                        if len(clean_hex) % 2 != 0:
+                            clean_hex = clean_hex[:-1]
+                            
+                        try:
+                            decoded_bytes = bytes.fromhex(clean_hex)
+                            ascii_data = decoded_bytes.decode('ascii', errors='replace')
+                            
+                            if is_truncated:
+                                ascii_data += "..."
+                                
+                        except Exception as e:
+                            ascii_data = f"[Hex Decode Error: {e}]"
 
-                    # 실제 데이터가 있는 경우에만 문자열에 포함되도록 구성
-                    data_str = f" | Data: {capdata}" if capdata else ""
+                    data_str = f" | Data(ASCII): {ascii_data}" if ascii_data else ""
                     
                     msg = f"Time: {frame_time} | Len: {length} | Proto: {protocol} | Info: {info}{data_str}"
                     self._log(MsgType.RX, msg)
