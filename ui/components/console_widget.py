@@ -17,6 +17,8 @@
 ### - 이전까지 출력된 메세지에는 적용되지 않으며, 새로 추가되는 메세지에 대해 적용할 필터를 설정한다.
 ## 4) 전체 메세지 내용은 최근 3000줄로 제한된다. (메모리가 과 사용을 방지하기 위해 오래된 메세지는 삭제하여 메모리가 과 사용 되지 않도록 조정)
 
+#테스트
+
 import queue
 from enum import Enum, auto
 from PySide6.QtWidgets import QListWidget, QListWidgetItem
