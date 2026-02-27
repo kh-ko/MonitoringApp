@@ -68,6 +68,23 @@ class UsbSniffService:
         else:
             print(f"[{msg_type.name}] {message}")
 
+    def _log_file(self, msg_type: MsgType, message: str):
+        # 1. 화면 출력(UI 업데이트) 비활성화 - 기존 코드 주석 처리
+        # if self.console_widget and hasattr(self.console_widget, 'add_message'):
+        #     self.console_widget.add_message(msg_type, message)
+        # else:
+        #     print(f"[{msg_type.name}] {message}")
+
+        # 2. 파일에 로그 쓰기 (임시 파일명: usb_capture_log.txt)
+        log_filename = "usb_capture_log.txt"
+        try:
+            # 'a' 모드로 열어 기존 내용 끝에 계속 추가되도록 합니다.
+            # 한글이나 특수문자 깨짐 방지를 위해 encoding='utf-8'을 지정합니다.
+            with open(log_filename, "a", encoding="utf-8") as f:
+                f.write(f"[{msg_type.name}] {message}\n")
+        except Exception as e:
+            print(f"파일 쓰기 실패: {e}")
+
     def _sniff_worker(self, interface_name):
         cmd = [
             self.tshark_path, '-l', '-i', interface_name,
@@ -76,8 +93,19 @@ class UsbSniffService:
             '-e', 'frame.len',
             '-e', '_ws.col.Protocol',
             '-e', '_ws.col.Info',
-            '-e', 'usb.capdata',
-            '-e', 'usb.data'
+            
+            '-e', 'usb.capdata',   # 기본 미확인 USB 데이터
+            '-e', 'data.data',     # 기타 미확인 일반 데이터
+            '-e', 'tcp.payload',   # TCP 변환 시 페이로드
+            '-e', 'udp.payload',   # UDP 변환 시 페이로드
+            
+            # 기존 프로토콜 해석 중지 옵션들
+            '--disable-protocol', 'usbms',
+            '--disable-protocol', 'scsi',
+            
+            # 🚀 핵심 추가: HID(Human Interface Device) 해석 강제 중지
+            # 가상 HID 방식을 사용하는 장비의 64바이트 인터럽트 데이터를 원본 그대로 추출합니다.
+            '--disable-protocol', 'usbhid'
         ]
         
         try:
@@ -89,7 +117,7 @@ class UsbSniffService:
                 text=True, encoding='utf-8', startupinfo=startupinfo
             )
             
-            self._log(MsgType.INFO, f"--- [{interface_name}] 캡처 시작 ---")
+            self._log(MsgType.INFO, f"--- [{interface_name}] 스마트 패킷 캡처 시작 ---")
 
             for line in self.capture_process.stdout:
                 if not self.is_capturing:
@@ -102,8 +130,6 @@ class UsbSniffService:
                 parts = line.split('\t')
                 if len(parts) >= 2:
                     frame_time = parts[0]
-                    
-                    # [추가된 부분] 정규식을 사용해 'HH:MM:SS.mmm' (시:분:초.밀리초) 형태만 추출
                     time_match = re.search(r'(\d{2}:\d{2}:\d{2}\.\d{3})', frame_time)
                     if time_match:
                         frame_time = time_match.group(1)
@@ -112,22 +138,19 @@ class UsbSniffService:
                     protocol = parts[2] if len(parts) > 2 else "Unknown"
                     info = parts[3] if len(parts) > 3 else "No Info"
                     
-                    # 2. [추가됨] 실제 데이터 추출
-                    capdata = parts[4] if len(parts) > 4 else ""
-                    usb_data = parts[5] if len(parts) > 5 else ""
+                    # 🚀 [핵심 파싱 로직] 4번 인덱스 이후의 모든 필드를 검사해서 빈칸이 아닌 첫 번째 데이터를 채택
+                    payload_candidates = [p for p in parts[4:] if p.strip()]
+                    raw_hex_data = payload_candidates[0] if payload_candidates else ""
                     
-                    # 프로토콜 해석 여부에 따라 둘 중 하나에 값이 들어감
-                    actual_hex_data = capdata if capdata else usb_data
-                    
+                    if raw_hex_data and ',' in raw_hex_data:
+                        raw_hex_data = raw_hex_data.replace(',', '')
+
                     ascii_data = ""
                     clean_hex = ""
 
-                    if actual_hex_data:
-                        # tshark 버전에 따라 콜론(:) 구분자가 들어갈 수 있으므로 제거
-                        # clean_hex = actual_hex_data.replace(':', '')
-                        clean_hex = actual_hex_data
+                    if raw_hex_data:
+                        clean_hex = raw_hex_data.replace(':', '')
                         
-                        # [최적화] 디코딩 전에 미리 자르기 (1글자 = 1바이트 = Hex 2자리)
                         is_truncated = False
                         if len(clean_hex) > 2000:
                             clean_hex = clean_hex[:2000]
@@ -140,19 +163,33 @@ class UsbSniffService:
                             decoded_bytes = bytes.fromhex(clean_hex)
                             ascii_data = decoded_bytes.decode('ascii', errors='replace')
                             
+                            # 제어 문자 필터링이 필요하다면 아래 주석을 해제하세요
+                            # ascii_data = ''.join([c if 32 <= ord(c) < 127 else '.' for c in ascii_data])
+                            
                             if is_truncated:
                                 ascii_data += "..."
                                 
                         except Exception as e:
-                            ascii_data = f"[Hex Decode Error: {e}]"
+                            ascii_data = f"[Decode Error: {e}]"
 
+                    # 💡 내용이 있는 경우에만 Data를 출력 (Len: 27 패킷은 Data 부분 없이 출력됨)
                     data_str = f" | Data(ASCII): {ascii_data}" if ascii_data else ""
                     
                     msg = f"Time: {frame_time} | Len: {length} | Proto: {protocol} | Info: {info}{data_str}"
-                    self._log(MsgType.RX, msg)
-                        
+                    
+                    # Info 항목에 'out'이 포함되어 있으면 송신(TX), 그 외(주로 'in')는 수신(RX)으로 판별
+                    if 'out' in info.lower():
+                        self._log(MsgType.TX, msg)
+                    else:
+                        self._log(MsgType.RX, msg)
+                    
+            if self.is_capturing and self.capture_process:
+                err_msg = self.capture_process.stderr.read()
+                if err_msg:
+                    self._log(MsgType.ERROR, f"tshark 에러: {err_msg.strip()}")
+
         except Exception as e:
-            self._log(MsgType.ERROR, f"캡처 중 에러 발생: {e}")
+            self._log(MsgType.ERROR, f"파이썬 에러: {e}")
         finally:
             self._cleanup()
 
