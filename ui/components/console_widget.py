@@ -10,7 +10,7 @@
 ## 3) QListWidget 상속받아 구현한다.
 ## 4) 메세지 종류에 따라 색상을 다르게 표시한다.
 
-#4. 기능(API):
+#4. 기능(API + UI):
 ## 1) 메세지를 추가한다. (add_message)
 ## 2) 현재 창에 표시된 모든 메세지를 삭제한다. (clear_message)
 ## 3) 메세지를 필터링한다. (filter_message)
@@ -20,9 +20,13 @@
 #테스트
 import queue
 from enum import Enum, auto
-from PySide6.QtWidgets import QListWidget, QListWidgetItem
-from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
+                               QListWidget, QListWidgetItem)
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor, QFont
+
+# qFluentWidget에서 CheckBox 임포트
+from qfluentwidgets import CheckBox  
 
 class MsgType(Enum):
     INFO = auto()
@@ -31,7 +35,9 @@ class MsgType(Enum):
     TX = auto()
     RX = auto()
 
-class ConsoleWidget(QListWidget):
+class ConsoleWidget(QWidget):  # 기존 QListWidget 대신 QWidget 상속으로 변경
+    MAX_LINES = 20000
+
     COLOR_MAP = {
         MsgType.INFO: "#00FF00",     
         MsgType.ERROR: "#FF3333",    
@@ -42,28 +48,10 @@ class ConsoleWidget(QListWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._allowed_filters = set(MsgType)  # 초기에는 모든 필터 허용
         
-        # 기본 UI 설정
-        self.setStyleSheet("""
-            QListWidget {
-                background-color: black;
-                padding: 5px;
-            }
-            QListWidget::item {
-                padding: 2px;
-            }
-        """)
+        self._init_ui()
         
-        # 폰트 설정
-        font = QFont("Consolas", 10)
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        self.setFont(font)
-
-        # 단어 잘림 방지 및 가로 스크롤바 생성 허용
-        self.setWordWrap(False) 
-
-        self._allowed_filters = {MsgType.INFO, MsgType.ERROR, MsgType.WARNING, MsgType.TX, MsgType.RX}
-
         # 스레드 안전한 큐 생성
         self.msg_queue = queue.Queue()
         
@@ -72,38 +60,82 @@ class ConsoleWidget(QListWidget):
         self.update_timer.timeout.connect(self._process_message_queue)
         self.update_timer.start(100)
 
+    def _init_ui(self):
+        # 1. 메인 레이아웃 (수직)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 2. 상단 필터 레이아웃 (수평)
+        self.filter_layout = QHBoxLayout()
+        self.filter_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        
+        # 체크박스들을 딕셔너리에 저장하여 관리
+        self.checkboxes = {}
+        for msg_type in MsgType:
+            cb = CheckBox(msg_type.name, self)
+            cb.setChecked(True)
+            cb.stateChanged.connect(self._update_filters_from_ui)
+            
+            self.filter_layout.addWidget(cb)
+            self.checkboxes[msg_type] = cb
+            
+        # 3. 하단 로그 리스트 위젯 (기존 로직 이동)
+        self.list_widget = QListWidget(self)
+        self.list_widget.setStyleSheet("""
+            QListWidget {
+                background-color: black;
+                padding: 5px;
+                border: 1px solid #333333; /* 위젯 구분을 위한 테두리 추가 */
+            }
+            QListWidget::item {
+                padding: 2px;
+            }
+        """)
+        font = QFont("Consolas", 10)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self.list_widget.setFont(font)
+        self.list_widget.setWordWrap(False) 
+
+        # 레이아웃 조립
+        self.main_layout.addLayout(self.filter_layout)
+        self.main_layout.addWidget(self.list_widget)
+
+    def _update_filters_from_ui(self):
+        """UI의 체크박스 상태가 변경될 때 내부 필터 셋을 업데이트합니다."""
+        new_filters = {msg_type for msg_type, cb in self.checkboxes.items() if cb.isChecked()}
+        self._allowed_filters = new_filters
+
+    # ------------------ API 기능 ------------------
+
     def add_message(self, msg_type: MsgType, message: str):
         self.msg_queue.put((msg_type, message))
 
     def clear_message(self):
-        self.clear()
+        self.list_widget.clear()
         # 큐도 함께 비워줌 (Thread-safe clear)
         with self.msg_queue.mutex:
             self.msg_queue.queue.clear()
 
-    def filter_message(self, allowed_types: list[MsgType]):
-        self._allowed_filters = set(allowed_types)
+    # ------------------ 내부 큐 처리 ------------------
 
     def _process_message_queue(self):
-        """100ms 마다 큐에 쌓인 메세지를 한 번에 UI에 반영합니다."""
         if self.msg_queue.empty():
             return
 
-        # 1. 자동 스크롤 확인 (아이템이 없거나 이미 맨 아래에 있는 경우)
-        scrollbar = self.verticalScrollBar()
-        is_scrolled_to_bottom = (self.count() == 0) or (scrollbar.value() == scrollbar.maximum())
+        scrollbar = self.list_widget.verticalScrollBar()
+        is_scrolled_to_bottom = (self.list_widget.count() == 0) or (scrollbar.value() == scrollbar.maximum())
 
         # 렌더링 부하 억제
-        self.setUpdatesEnabled(False)
+        self.list_widget.setUpdatesEnabled(False)
         
         added_count = 0
-        # 1회 업데이트 당 최대 1000개씩만 처리
         while not self.msg_queue.empty() and added_count < 1000:
             try:
                 msg_type, message = self.msg_queue.get_nowait()
             except queue.Empty:
                 break
                 
+            # 요구사항: 큐에서 꺼낼 때 필터를 확인하므로 이전 메세지는 그대로 둠
             if msg_type not in self._allowed_filters:
                 continue
 
@@ -112,19 +144,17 @@ class ConsoleWidget(QListWidget):
             color_hex = self.COLOR_MAP.get(msg_type, "#FFFFFF")
             item.setForeground(QColor(color_hex))
             
-            self.addItem(item)
+            self.list_widget.addItem(item)
             added_count += 1
 
-        # 🚀 수정됨: 요구사항에 맞춰 최대 3000줄로 제한
-        excess = self.count() - 3000
+        # 변수화된 max_lines(기본 20000)를 활용한 제한 처리
+        excess = self.list_widget.count() - self.MAX_LINES
         if excess > 0:
             for _ in range(excess):
-                taken_item = self.takeItem(0)
+                taken_item = self.list_widget.takeItem(0)
                 del taken_item
 
-        # 화면 그리기 재개
-        self.setUpdatesEnabled(True)
+        self.list_widget.setUpdatesEnabled(True)
 
-        # 2. 이전 상태가 최하단이었을 경우에만 스크롤을 맨 밑으로 내림
         if is_scrolled_to_bottom and added_count > 0:
-            self.scrollToBottom()
+            self.list_widget.scrollToBottom()
