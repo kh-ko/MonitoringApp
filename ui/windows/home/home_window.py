@@ -1,11 +1,11 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
-from qfluentwidgets import FluentWidget, FluentIcon as FIF, TitleLabel, ComboBox, PushButton
+from qfluentwidgets import FluentWidget, FluentIcon as FIF, TitleLabel, ComboBox, PushButton, CheckBox
 
 # 기존에 작성하신 콘솔 위젯 임포트
 from ui.components.console_widget import ConsoleWidget
 # USB 캡처 서비스 임포트
-from core.usb_sniff_service import UsbSniffService
+from core.usb_sniff_service import UsbSniffService, UsbFilter
 
 class HomeWindow(FluentWidget):
     def __init__(self):
@@ -39,6 +39,19 @@ class HomeWindow(FluentWidget):
         self.control_layout.addWidget(self.stop_btn)
         self.control_layout.addStretch(1) # 우측 여백 확보
         
+        # 컨트롤 패널에 필터 체크박스 추가
+        self.filter_layout = QHBoxLayout()
+        self.cb_hid = CheckBox("HID", self)
+        self.cb_serial = CheckBox("Serial", self)
+        self.cb_storage = CheckBox("Storage", self)
+        
+        self.filter_layout.addWidget(self.cb_hid)
+        self.filter_layout.addWidget(self.cb_serial)
+        self.filter_layout.addWidget(self.cb_storage)
+        self.filter_layout.addStretch(1)
+        
+        # 레이아웃에 추가
+        self.main_layout.addLayout(self.filter_layout)
         self.main_layout.addLayout(self.control_layout)
 
         # 콘솔 위젯 추가
@@ -78,8 +91,17 @@ class HomeWindow(FluentWidget):
             from ui.components.console_widget import MsgType
             self.console.add_message(MsgType.WARNING, "캡처할 인터페이스를 먼저 선택해주세요.")
             return
-            
-        self.sniffer.start_capture(selected_interface)
+
+        # 선택된 필터 수집
+        active_filters = []
+        if self.cb_hid.isChecked(): active_filters.append(UsbFilter.HID)
+        if self.cb_serial.isChecked(): active_filters.append(UsbFilter.SERIAL)
+        if self.cb_storage.isChecked(): active_filters.append(UsbFilter.STORAGE)
+        
+        if not active_filters:
+            active_filters = [UsbFilter.ALL] # 아무것도 선택 안하면 전체 캡처
+
+        self.sniffer.start_capture(selected_interface, active_filters)
         
         # UI 상태 업데이트
         self.start_btn.setEnabled(False)

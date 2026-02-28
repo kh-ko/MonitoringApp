@@ -95,9 +95,7 @@ class UsbSniffService:
     def _sniff_worker(self, interface_name, protocol_filters: list):
         # 💡 1. 블랙리스트: 데이터 해석을 방해하는 디섹터들을 몽땅 끕니다.
         disable_protocols = {
-            'usbhid', 'usbms', 'scsi', 'usbtty', 'usb-cdc', 
-            'ftdi-ft', 'cp210x', 'ch341', 'rndis', 'cdc-ncm', 
-            'bthci_usb', 'usb-audio', 'usb-video'
+            'usbhid', 'usbms', 'scsi', 'ftdi-ft'
         }
 
         # 💡 2. 명령어 세팅: 디섹터를 껐으므로 -e 옵션이 엄청나게 심플해집니다!
